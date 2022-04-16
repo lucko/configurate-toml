@@ -4,8 +4,8 @@ plugins {
     signing
 }
 
-group "me.lucko.configurate"
-version "4.1.2"
+group = "me.lucko.configurate"
+version = "4.1.2"
 
 repositories {
     mavenCentral()
