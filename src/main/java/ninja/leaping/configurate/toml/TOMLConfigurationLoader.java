@@ -16,35 +16,46 @@
  */
 package ninja.leaping.configurate.toml;
 
-import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Lists;
 import com.moandjiezana.toml.Toml;
 import com.moandjiezana.toml.TomlWriter;
 
 import org.checkerframework.checker.nullness.qual.NonNull;
-
-import ninja.leaping.configurate.ConfigurationNode;
-import ninja.leaping.configurate.ConfigurationOptions;
-import ninja.leaping.configurate.SimpleConfigurationNode;
-import ninja.leaping.configurate.loader.AbstractConfigurationLoader;
-import ninja.leaping.configurate.loader.CommentHandler;
-import ninja.leaping.configurate.loader.CommentHandlers;
+import org.spongepowered.configurate.BasicConfigurationNode;
+import org.spongepowered.configurate.ConfigurateException;
+import org.spongepowered.configurate.ConfigurationNode;
+import org.spongepowered.configurate.ConfigurationOptions;
+import org.spongepowered.configurate.loader.AbstractConfigurationLoader;
+import org.spongepowered.configurate.loader.CommentHandler;
+import org.spongepowered.configurate.loader.CommentHandlers;
+import org.spongepowered.configurate.loader.ParsingException;
+import org.spongepowered.configurate.util.UnmodifiableCollections;
 
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.Writer;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TimeZone;
 
 /**
  * A loader for the TOML configurations, using the toml4j library for parsing and generation.
  */
-public class TOMLConfigurationLoader extends AbstractConfigurationLoader<ConfigurationNode> {
+public class TOMLConfigurationLoader extends AbstractConfigurationLoader<BasicConfigurationNode> {
+
+    private static final Set<Class<?>> NATIVE_TYPES = UnmodifiableCollections.toSet(
+            List.class, Map.class, Double.class, Instant.class, Float.class, Integer.class,
+            Boolean.class, String.class, Long.class, Date.class
+    );
+
+    static final ConfigurationOptions DEFAULT_OPTIONS = ConfigurationOptions.defaults()
+            .nativeTypes(NATIVE_TYPES)
+            .serializers(MoreTypes.SERIALIZERS);
 
     /**
      * Creates a new {@link TOMLConfigurationLoader} builder.
@@ -59,12 +70,16 @@ public class TOMLConfigurationLoader extends AbstractConfigurationLoader<Configu
     /**
      * Builds a {@link TOMLConfigurationLoader}.
      */
-    public static class Builder extends AbstractConfigurationLoader.Builder<Builder> {
+    public static class Builder extends AbstractConfigurationLoader.Builder<Builder, TOMLConfigurationLoader> {
         private int keyIndent = 0;
         private int tableIndent = 0;
         private int arrayPadding = 0;
         private ZoneOffset zoneOffset = ZoneOffset.UTC;
         private boolean fractionalSeconds = false;
+
+        Builder() {
+            this.defaultOptions(DEFAULT_OPTIONS);
+        }
 
         /**
          * Sets the level of indentation the resultant loader should use for keys.
@@ -175,6 +190,7 @@ public class TOMLConfigurationLoader extends AbstractConfigurationLoader<Configu
         @NonNull
         @Override
         public TOMLConfigurationLoader build() {
+            this.defaultOptions(o -> o.nativeTypes(NATIVE_TYPES));
             return new TOMLConfigurationLoader(this);
         }
     }
@@ -192,7 +208,6 @@ public class TOMLConfigurationLoader extends AbstractConfigurationLoader<Configu
         this.arrayPadding = builder.getArrayPadding();
         this.zoneOffset = builder.getZoneOffset();
         this.fractionalSeconds = builder.getUseFractionalSeconds();
-        MoreTypes.registerSerializers();
     }
 
     private TomlWriter createWriter() {
@@ -210,7 +225,7 @@ public class TOMLConfigurationLoader extends AbstractConfigurationLoader<Configu
     }
 
     @Override
-    protected void loadInternal(ConfigurationNode node, BufferedReader reader) throws IOException {
+    protected void loadInternal(BasicConfigurationNode node, BufferedReader reader) throws ParsingException {
         Toml toml = new Toml().read(reader);
         Map<String, Object> map = toml.toMap();
         readObject(map, node);
@@ -219,63 +234,64 @@ public class TOMLConfigurationLoader extends AbstractConfigurationLoader<Configu
     @SuppressWarnings("unchecked")
     private static void readObject(Map<String, Object> from, ConfigurationNode to) {
         for (Map.Entry<String, Object> entry : from.entrySet()) {
-            ConfigurationNode node = to.getNode(entry.getKey().replace("\"",""));
+            ConfigurationNode node = to.node(entry.getKey().replace("\"",""));
             Object value = entry.getValue();
 
             if (value instanceof Map) {
                 readObject((Map<String, Object>) value, node);
             } else if (value instanceof List) {
-                List list = (List) value;
+                List<?> list = (List<?>) value;
                 for (Object element : list) {
-                    ConfigurationNode listNode = node.getAppendedNode();
+                    ConfigurationNode listNode = node.appendListNode();
                     if (element instanceof Map) {
                         readObject((Map<String, Object>) element, listNode);
                     } else {
-                        listNode.setValue(element);
+                        listNode.raw(element);
                     }
                 }
             } else {
-                node.setValue(value);
+                node.raw(value);
             }
         }
     }
 
     @Override
-    protected void saveInternal(ConfigurationNode node, Writer writer) throws IOException {
-        Map<String, Object> map = writeNode(node);
-        createWriter().write(map, writer);
+    protected void saveInternal(ConfigurationNode node, Writer writer) throws ConfigurateException {
+        try {
+            Map<String, Object> map = writeNode(node);
+            createWriter().write(map, writer);
+        } catch (IOException e) {
+            throw ConfigurateException.wrap(node, e);
+        }
     }
 
     private static Map<String, Object> writeNode(ConfigurationNode from) {
         Map<String, Object> map = new LinkedHashMap<>();
-        for (Map.Entry<Object, ? extends ConfigurationNode> entry : from.getChildrenMap().entrySet()) {
+        for (Map.Entry<Object, ? extends ConfigurationNode> entry : from.childrenMap().entrySet()) {
             ConfigurationNode node = entry.getValue();
-            if (node.hasListChildren()) {
-                List<Object> list = Lists.newArrayList();
-                for (ConfigurationNode listNode : node.getChildrenList()) {
-                    if (listNode.hasMapChildren()) {
+            if (node.isList()) {
+                List<Object> list = new ArrayList<>();
+                for (ConfigurationNode listNode : node.childrenList()) {
+                    if (listNode.isMap()) {
                         list.add(writeNode(listNode));
                     } else {
-                        list.add(listNode.getValue());
+                        list.add(listNode.raw());
                     }
                 }
                 map.put(entry.getKey().toString(), list);
-            } else if (node.hasMapChildren()) {
+            } else if (node.isMap()) {
                 map.put(entry.getKey().toString(), writeNode(node));
-            } else if (node.getValue() instanceof Instant) {
-                map.put(entry.getKey().toString(), MoreTypes.asDate(node.getValue()));
+            } else if (node.raw() instanceof Instant) {
+                map.put(entry.getKey().toString(), MoreTypes.asDate(node.raw()));
             } else {
-                map.put(entry.getKey().toString(), node.getValue());
+                map.put(entry.getKey().toString(), node.raw());
             }
         }
         return map;
     }
 
-    @NonNull
     @Override
-    public ConfigurationNode createEmptyNode(@NonNull ConfigurationOptions options) {
-        options = options.setAcceptedTypes(ImmutableSet.of(List.class, Map.class, Double.class,
-                Instant.class, Float.class, Integer.class, Boolean.class, String.class, Long.class, Date.class));
-        return SimpleConfigurationNode.root(options);
+    public BasicConfigurationNode createNode(final ConfigurationOptions options) {
+        return BasicConfigurationNode.root(options.nativeTypes(NATIVE_TYPES));
     }
 }

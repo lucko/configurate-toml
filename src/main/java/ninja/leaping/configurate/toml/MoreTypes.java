@@ -16,36 +16,34 @@
  */
 package ninja.leaping.configurate.toml;
 
-import com.google.common.reflect.TypeToken;
-
 import org.checkerframework.checker.nullness.qual.Nullable;
+import org.spongepowered.configurate.serialize.ScalarSerializer;
+import org.spongepowered.configurate.serialize.TypeSerializerCollection;
 
-import ninja.leaping.configurate.ConfigurationNode;
-import ninja.leaping.configurate.objectmapping.ObjectMappingException;
-import ninja.leaping.configurate.objectmapping.serialize.TypeSerializer;
-import ninja.leaping.configurate.objectmapping.serialize.TypeSerializers;
-
+import java.lang.reflect.Type;
 import java.text.DateFormat;
 import java.text.ParseException;
 import java.time.DateTimeException;
 import java.time.Instant;
+import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoField;
 import java.time.temporal.TemporalAccessor;
 import java.util.Date;
+import java.util.function.Predicate;
 
 /**
- * Extension of {@link ninja.leaping.configurate.Types}.
+ * Extra types for working with TOML.
  */
 class MoreTypes {
 
-    static {
-        TypeSerializers.getDefaultSerializers().registerType(TypeToken.of(Instant.class), new InstantSerializer());
-        TypeSerializers.getDefaultSerializers().registerType(TypeToken.of(Date.class), new DateSerializer());
-    }
+    static final TypeSerializerCollection SERIALIZERS;
 
-    static void registerSerializers() {
-        // to ensure the static initializer above has been called.
+    static {
+        SERIALIZERS = TypeSerializerCollection.defaults().childBuilder()
+                .register(new InstantSerializer())
+                .register(new DateSerializer())
+                .build();
     }
 
     /**
@@ -178,29 +176,35 @@ class MoreTypes {
         return value instanceof Instant ? (Instant) value : null;
     }
 
-    private static class InstantSerializer implements TypeSerializer<Instant> {
-
-        @Override
-        public Instant deserialize(TypeToken<?> type, ConfigurationNode value) throws ObjectMappingException {
-            return asInstant(value.getValue());
+    private static class InstantSerializer extends ScalarSerializer<Instant> {
+        InstantSerializer() {
+            super(Instant.class);
         }
 
         @Override
-        public void serialize(TypeToken<?> type, Instant obj, ConfigurationNode value) throws ObjectMappingException {
-            value.setValue(obj);
+        public Instant deserialize(Type type, Object obj) {
+            return asInstant(obj);
+        }
+
+        @Override
+        protected Object serialize(Instant item, Predicate<Class<?>> typeSupported) {
+            return DateTimeFormatter.ISO_INSTANT.format(item);
         }
     }
 
-    private static class DateSerializer implements TypeSerializer<Date> {
-
-        @Override
-        public Date deserialize(TypeToken<?> type, ConfigurationNode value) throws ObjectMappingException {
-            return asDate(value.getValue());
+    private static class DateSerializer extends ScalarSerializer<Date> {
+        DateSerializer() {
+            super(Date.class);
         }
 
         @Override
-        public void serialize(TypeToken<?> type, Date obj, ConfigurationNode value) throws ObjectMappingException {
-            value.setValue(obj);
+        public Date deserialize(Type type, Object obj) {
+            return asDate(obj);
+        }
+
+        @Override
+        protected Object serialize(Date item, Predicate<Class<?>> typeSupported) {
+            return DateFormat.getInstance().format(item);
         }
     }
 }
